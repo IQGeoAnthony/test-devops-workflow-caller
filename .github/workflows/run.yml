@@ -1,0 +1,12 @@
+name: Test workflow caller
+
+on:
+  workflow_dispatch:
+
+jobs:
+  call:
+    uses: IQGeoAnthony/test-devops-workflows/.github/workflows/test.yml@main
+    with:
+      module: "test-module"
+    secrets:
+      GH_TOKEN: ${{ secrets.GH_TOKEN }}
