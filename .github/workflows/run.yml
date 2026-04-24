@@ -1,9 +1,7 @@
 name: Promote current latest RC images to release images automatically (dry run)
 
 on:
-    push:
-        branches:
-            - devops/automatic-tag-promotion-testing
+    workflow_dispatch:
 
 jobs:
     promote-rc-to-final-dryrun:
