@@ -1,12 +1,88 @@
-name: Test workflow caller
+name: Promote current latest RC images to release images automatically (dry run)
 
 on:
-  workflow_dispatch:
+    push:
+        branches:
+            - devops/automatic-tag-promotion-testing
 
 jobs:
-  call:
-    uses: IQGeoAnthony/test-devops-workflows/.github/workflows/test.yml@main
-    with:
-      module: "test-module"
-    secrets:
-      GH_TOKEN: ${{ secrets.GH_TOKEN }}
+    promote-rc-to-final-dryrun:
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@v4
+
+            - name: Install skopeo and jq
+              run: |
+                  sudo apt-get update && sudo apt-get install -y skopeo jq
+
+            - name: Find highest RC tag in Harbor
+              id: find-rc
+              run: |
+                  IMAGE="harbor.delivery.iqgeo.cloud/engineering/editions/iqgeo-saas-wfm-telecom-appserver"
+
+                  echo "Querying Harbor for RC tags on: $IMAGE"
+
+                  ALL_TAGS=$(skopeo list-tags \
+                      --creds ${{ secrets.HARBOR_USERNAME }}:${{ secrets.HARBOR_CLI_SECRET }} \
+                      docker://$IMAGE | jq -r '.Tags[]' || echo "")
+
+                  #Filter to semantic RC tags only
+                  RC_TAGS=$(echo "$ALL_TAGS" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.rc[0-9]+$' || true)
+
+                  if [[ -z "$RC_TAGS" ]]; then
+                      echo "No RC tags found in Harbor. Script stops here."
+                      exit 1
+                  fi
+
+                  echo "All RC tags found: $RC_TAGS"
+
+                  #Sort semantically and take the highest
+                  HIGHEST_RC=$(echo "$RC_TAGS" | sort -V | tail -n1)
+
+                  echo "Highest RC tag by version: $HIGHEST_RC"
+                  echo "rc_tag=$HIGHEST_RC" >> $GITHUB_OUTPUT
+
+            - name: Extract version from RC tag
+              id: extract-version
+              run: |
+                  RC_TAG="${{ steps.find-rc.outputs.rc_tag }}"
+
+                  VERSION=$(echo "$RC_TAG" | sed -n 's/\([0-9]\+\.[0-9]\+\.[0-9]\+\)\.rc[0-9]\+/\1/p')
+
+                  if [[ -z "$VERSION" ]]; then
+                      echo "Could not extract version from RC tag: $RC_TAG. Script would die here."
+                      exit 1
+                  fi
+
+                  echo "Extracted version $VERSION from $RC_TAG. This would create a git tag of v$VERSION.final"
+                  echo "version=$VERSION" >> $GITHUB_OUTPUT
+                  echo "git_tag=v$VERSION.final" >> $GITHUB_OUTPUT
+
+            - name: Check git tag does not already exist
+              run: |
+                  GIT_TAG="${{ steps.extract-version.outputs.git_tag }}"
+
+                  if git rev-parse "$GIT_TAG" >/dev/null 2>&1; then
+                      echo "Git tag $GIT_TAG already exists in the repo. Script would die here."
+                      exit 1
+                  fi
+
+                  echo "Git tag $GIT_TAG does not exist, we can safely create it."
+
+            - name: Print execution
+              run: |
+                  RC_TAG="${{ steps.find-rc.outputs.rc_tag }}"
+                  GIT_TAG="${{ steps.extract-version.outputs.git_tag }}"
+                  VERSION="${{ steps.extract-version.outputs.version }}"
+                  MAJOR=$(echo $VERSION | cut -d. -f1)
+                  MINOR=$(echo $VERSION | cut -d. -f2)
+
+                  echo "Dry run summary:"
+                  echo ""
+                  echo "Highest RC tag found: $RC_TAG"
+                  echo "Version extracted: $VERSION"
+                  echo "Git tag to be pushed: $GIT_TAG"
+                  echo "Triggered by: ${{ github.actor }}"
+                  echo ""
+                  echo "Once $GIT_TAG is pushed, the existing build workflow triggers which should promote the latest tag."
